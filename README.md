@@ -120,3 +120,25 @@ http_port_t                    tcp      80, 81, 443, 488, 8008, 8009, 8443, 9000
 ```
 [root@localhost ~]# semanage port -d -t http_port_t -p tcp 3400
 ```
+Теперь посмотрим, какой модуль надо доустановить.
+
+```
+[root@localhost ~]# whereis nginx
+nginx: /usr/sbin/nginx /usr/lib64/nginx /etc/nginx /usr/share/nginx /usr/share/man/man8/nginx.8.gz /usr/share/man/man3/nginx.3pm.gz
+[root@localhost ~]# ls -Z /usr/sbin/nginx 
+system_u:object_r:httpd_exec_t:s0 /usr/sbin/nginx
+[root@localhost ~]# audit2allow -M httpd_add --debug < /var/log/audit/audit.log 
+********************* ВАЖНО ************************
+Чтобы сделать этот пакет политики активным, выполните: semodule -i httpd_add.pp
+
+[root@localhost ~]# semodule -i httpd_add.pp
+[root@localhost ~]# systemctl status nginx
+● nginx.service - The nginx HTTP and reverse proxy server
+   Loaded: loaded (/usr/lib/systemd/system/nginx.service; enabled; vendor preset: disabled)
+   Active: active (running) since Sun 2020-10-04 10:24:24 UTC; 4s ago
+   
+[root@localhost ~]# netstat -tulpn | grep nginx
+tcp        0      0 0.0.0.0:3400            0.0.0.0:*               LISTEN      35617/nginx: master 
+tcp6       0      0 :::3400                 :::*                    LISTEN      35617/nginx: master 
+```
+Видим снова успешно стартовавший nginx на нашем выбранном порту.
