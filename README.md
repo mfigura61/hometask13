@@ -1,95 +1,122 @@
-# Homework #11. Ansible
+# Homework #13. Selinux
 
-Домашнее задание
-Первые шаги с Ansible
-Подготовить стенд на Vagrant как минимум с одним сервером. На этом сервере используя Ansible необходимо развернуть nginx со следующими условиями:
-- необходимо использовать модуль yum/apt
-- конфигурационные файлы должны быть взяты из шаблона jinja2 с перемененными
-- после установки nginx должен быть в режиме enabled в systemd
-- должен быть использован notify для старта nginx после установки
-- сайт должен слушать на нестандартном порту - 8080, для этого использовать переменные в Ansible
+1. Запустить nginx на нестандартном порту 3-мя разными способами:
+- переключатели setsebool;
+- добавление нестандартного порта в имеющийся тип;
+- формирование и установка модуля SELinux.
+К сдаче:
+- README с описанием каждого решения (скриншоты и демонстрация приветствуются).
 
-  
-*Опциально сделать это все с помощью Ansible role*
 
----
 
 ## Проведем подготовку.
-Запустим новую виртуалку согласно vagrant file.пока без применения роли.  
+Запустим новую виртуалку в vagrant.Centos8 + установим все необходимые пакеты:nginx, net-tools,setools-console,policycoreutils-python.Nginx стартован и слушает на 80 порту,не вызывая никаких подозрений у Selinux
 ```
-vagrant up --no-provision
-```
+[root@localhost ~]# uname -r
+4.18.0-80.el8.x86_64
+[root@localhost ~]# service nginx restart
+Redirecting to /bin/systemctl restart nginx.service
 
-Проверим конфиг ssh  
-```
-root@mike-UL20A:/home/mike/hometask11/dz11# vagrant ssh-config
-Host nginx
-  HostName 127.0.0.1
-  User vagrant
-  Port 2222
-  UserKnownHostsFile /dev/null
-  StrictHostKeyChecking no
-  PasswordAuthentication no
-  IdentityFile /home/mike/hometask11/dz11/.vagrant/machines/nginx/virtualbox/private_key
-  IdentitiesOnly yes
-  LogLevel
-
-```
-
-Удостоверимся, что порт 2222 вписан в конфиге, если что -подправим.Создадим файл hosts, где опишем нашу небольшую инфраструктуру
-```
-cat hosts
-
-[web]
-nginx ansible_host=127.0.0.1 ansible_port=2222 ansible_private_key_file=.vagrant/machines/nginx/virtualbox/private_key
-```
-
-Теперь запустим виртуалку вместе c автоконфигурацией ее ансибл плейбуком nginx-with-role.yml.
-```
-vagrant provision
-...
-RUNNING HANDLER [nginx-role : reload nginx] ************************************
-changed: [nginx]
-
-PLAY RECAP *********************************************************************
-nginx                      : ok=6    changed=5    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0   
-```
-
-
-## Проверка.
-Перейдем в браузере по http://192.168.11.150:8080/ и увидим открывшуюся страничку на нашем веб сервере.
-Залогинившись в виртуалку проверим изменения, внесенные плейбуком
-
-Проверим, что  8080 слушается сервером nginx
-```
-vagrant ssh
-
-[vagrant@nginx ~]$ sudo ss -tulpn | grep nginx
-tcp    LISTEN     0      128       *:8080                  *:*                   users:(("nginx",pid=3172,fd=6),("nginx",pid=3095,fd=6))
-
-```
-
-Кроме того, удостоверимся, что сервис стартован.
-```
-[vagrant@nginx ~]$ sudo systemctl status nginx
+[root@localhost ~]# systemctl status nginx
 ● nginx.service - The nginx HTTP and reverse proxy server
    Loaded: loaded (/usr/lib/systemd/system/nginx.service; enabled; vendor preset: disabled)
-   Active: active (running) since Tue 2020-09-22 21:29:47 UTC; 14min ago
-  Process: 3171 ExecReload=/bin/kill -s HUP $MAINPID (code=exited, status=0/SUCCESS)
-  Process: 3093 ExecStart=/usr/sbin/nginx (code=exited, status=0/SUCCESS)
-  Process: 3092 ExecStartPre=/usr/sbin/nginx -t (code=exited, status=0/SUCCESS)
-  Process: 3090 ExecStartPre=/usr/bin/rm -f /run/nginx.pid (code=exited, status=0/SUCCESS)
- Main PID: 3095 (nginx)
+   Active: active (running) since Sun 2020-10-04 09:34:19 UTC; 5s ago
+  Process: 35285 ExecStart=/usr/sbin/nginx (code=exited, status=0/SUCCESS)
+  Process: 35282 ExecStartPre=/usr/sbin/nginx -t (code=exited, status=0/SUCCESS)
+  Process: 35281 ExecStartPre=/usr/bin/rm -f /run/nginx.pid (code=exited, status=0/SUCCESS)
+ Main PID: 35286 (nginx)
+ 
+[root@localhost ~]# netstat -tulpn | grep nginx
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      35286/nginx: master 
+tcp6       0      0 :::80                   :::*                    LISTEN      35286/nginx: master 
+[root@localhost ~]# sestatus 
+SELinux status:                 enabled
+SELinuxfs mount:                /sys/fs/selinux
+SELinux root directory:         /etc/selinux
+Loaded policy name:             targeted
+Current mode:                   enforcing
+Mode from config file:          enforcing
+Policy MLS status:              enabled
+Policy deny_unknown status:     allowed
+Memory protection checking:     actual (secure)
+Max kernel policy version:      31
+```
+## 1 способ setsebool ##
+Подправим конфиг nginx, сменив порт на нестандартный, чем заинтересуем Selinux.
+```
+[root@localhost ~]# vi /etc/nginx/nginx.conf
+[root@localhost ~]# cat /etc/nginx/nginx.conf | grep listen
+        listen       3400 default_server;
+        listen       [::]:3400 default_server;
+[root@localhost ~]# systemctl restart  nginx
+Job for nginx.service failed because the control process exited with error code.
+See "systemctl status nginx.service" and "journalctl -xe" for details.
+```
+После смены порта веб-сервер ожидаемо не взлетел.Смотрим логи.
+
+```
+[root@localhost ~]# cat /var/log/audit/audit.log 
+type=AVC msg=audit(1601804753.720:1665): avc:  denied  { name_bind } for  pid=35372 comm="nginx" src=3400 scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:object_r:unreserved_port_t:s0 tclass=tcp_socket permissive=0
+type=SYSCALL msg=audit(1601804753.720:1665): arch=c000003e syscall=49 success=no exit=-13 a0=8 a1=558bfc57d0e8 a2=10 a3=7ffce89b0a10 items=0 ppid=1 pid=35372 auid=4294967295 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=(none) ses=4294967295 comm="nginx" exe="/usr/sbin/nginx" subj=system_u:system_r:httpd_t:s0 key=(null)ARCH=x86_64 SYSCALL=bind AUID="unset" UID="root" GID="root" EUID="root" SUID="root" FSUID="root" EGID="root" SGID="root" FSGID="root"
+type=PROCTITLE msg=audit(1601804753.720:1665): proctitle=2F7573722F7362696E2F6E67696E78002D74
+type=SERVICE_START msg=audit(1601804753.834:1666): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='unit=nginx comm="systemd" exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=failed'UID="root" AUID="unset"
+```
+Воспользуемся утилитой audit2why,скоормив ей на вход логи.
+```
+[root@localhost ~]# audit2why </var/log/audit/audit.log 
+type=AVC msg=audit(1601805249.872:1667): avc:  denied  { name_bind } for  pid=35451 comm="nginx" src=3400 scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:object_r:unreserved_port_t:s0 tclass=tcp_socket permissive=0
+
+	Was caused by:
+	The boolean nis_enabled was set incorrectly. 
+	Description:
+	Allow system to run with NIS
+
+	Allow access by executing:
+	# setsebool -P nis_enabled 1
+[root@localhost ~]# 
+```
+Применим предложенное решение и видим, что все заработало.
+```
+[root@localhost ~]# setsebool -P nis_enabled 1
+[root@localhost ~]# systemctl restart nginx
+[root@localhost ~]# systemctl status nginx
+● nginx.service - The nginx HTTP and reverse proxy server
+   Loaded: loaded (/usr/lib/systemd/system/nginx.service; enabled; vendor preset: disabled)
+   Active: active (running) since Sun 2020-10-04 09:57:07 UTC; 8s ago
+  Process: 35481 ExecStart=/usr/sbin/nginx (code=exited, status=0/SUCCESS)
+  Process: 35479 ExecStartPre=/usr/sbin/nginx -t (code=exited, status=0/SUCCESS)
+  Process: 35477 ExecStartPre=/usr/bin/rm -f /run/nginx.pid (code=exited, status=0/SUCCESS)
+ Main PID: 35483 (nginx)
+    Tasks: 2 (limit: 2881)
+   Memory: 12.1M
    CGroup: /system.slice/nginx.service
-           ├─3095 nginx: master process /usr/sbin/nginx
-           └─3172 nginx: worker process
+           ├─35483 nginx: master process /usr/sbin/nginx
+           └─35484 nginx: worker process
 
-Sep 22 21:29:46 nginx systemd[1]: Starting The nginx HTTP and reverse proxy server...
-Sep 22 21:29:47 nginx nginx[3092]: nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
-Sep 22 21:29:47 nginx nginx[3092]: nginx: configuration file /etc/nginx/nginx.conf test is successful
-Sep 22 21:29:47 nginx systemd[1]: Started The nginx HTTP and reverse proxy server.
-Sep 22 21:29:55 nginx systemd[1]: Reloading The nginx HTTP and reverse proxy server.
-Sep 22 21:29:55 nginx systemd[1]: Reloaded The nginx HTTP and reverse proxy server.
-[vagrant@nginx ~]$ 
+Oct 04 09:57:06 localhost.localdomain systemd[1]: Starting The nginx HTTP and reverse proxy server...
+Oct 04 09:57:06 localhost.localdomain nginx[35479]: nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+```
+## 2 способ. Добавим нестандартный порт в список разрешенных ##
+Вернем setsebool -P nis_enabled 1 обратно в 0, снова сломав наш nginx на порту 3400.
+Выясним "а на каком же порту можно держать веб-сервер?"
+```
+[root@localhost ~]# semanage port -l | grep http_port
+http_port_t                    tcp      80, 81, 443, 488, 8008, 8009, 8443, 9000
+```
+Видим, что наш 3400 надо добавить в этот список.Добавим, рестарт-все ок, заработало.
 
+```
+[root@localhost ~]# semanage port -a -t http_port_t -p tcp 3400
+[root@localhost ~]# systemctl restart nginx
+[root@localhost ~]# systemctl status nginx
+● nginx.service - The nginx HTTP and reverse proxy server
+   Loaded: loaded (/usr/lib/systemd/system/nginx.service; enabled; vendor preset: disabled)
+   Active: active (running) since Sun 2020-10-04 10:02:14 UTC; 2s ago
+  Process: 35532 ExecStart=/usr/sbin/nginx (code=exited, status=0/SUCCESS)
+  Process: 35530 ExecStartPre=/usr/sbin/nginx -t (code=exited, status=0/SUCCESS)
+```
+## 3 способ. формирование и установка модуля SELinux ##
+Откатим изменения из п.2 
+```
+[root@localhost ~]# semanage port -d -t http_port_t -p tcp 3400
 ```
