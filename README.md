@@ -142,3 +142,77 @@ tcp        0      0 0.0.0.0:3400            0.0.0.0:*               LISTEN      
 tcp6       0      0 :::3400                 :::*                    LISTEN      35617/nginx: master 
 ```
 Видим снова успешно стартовавший nginx на нашем выбранном порту.
+
+
+
+
+## Задание 2 ##
+
+1.  Запустим приложенный по ссылке стенд, дождемся конфигурации обеих машин. На каждой убедимся во включенном состоянии selinux и наличии всех необходимых вспомогательных инструментов типа audit2allow  и т д.  
+2. Зачистим на обеих машинах /var/log/audit/audit.log для чистоты эксперимента и удобства.  
+3. Воспроизведем проблему
+```
+[root@client ~]# nsupdate -k /etc/named.zonetransfer.key
+> server 192.168.50.10
+> zone ddns.lab
+> update add www.ddns.lab. 60 A 192.168.50.15
+> send
+update failed: SERVFAIL
+[root@client ~]# cat /var/log/audit/audit.log 
+
+type=USER_ACCT msg=audit(1601859662.192:1621): pid=25135 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:crond_t:s0-s0:c0.c1023 msg='op=PAM:accounting grantors=pam_access,pam_unix,pam_localuser acct="root" exe="/usr/sbin/crond" hostname=? addr=? terminal=cron res=success'
+type=CRED_ACQ msg=audit(1601859662.192:1622): pid=25135 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:crond_t:s0-s0:c0.c1023 msg='op=PAM:setcred grantors=pam_env,pam_unix acct="root" exe="/usr/sbin/crond" hostname=? addr=? terminal=cron res=success'
+type=LOGIN msg=audit(1601859662.192:1623): pid=25135 uid=0 subj=system_u:system_r:crond_t:s0-s0:c0.c1023 old-auid=4294967295 auid=0 tty=(none) old-ses=4294967295 ses=9 res=1
+type=USER_START msg=audit(1601859662.407:1624): pid=25135 uid=0 auid=0 ses=9 subj=system_u:system_r:crond_t:s0-s0:c0.c1023 msg='op=PAM:session_open grantors=pam_loginuid,pam_keyinit,pam_limits,pam_systemd acct="root" exe="/usr/sbin/crond" hostname=? addr=? terminal=cron res=success'
+type=CRED_REFR msg=audit(1601859662.407:1625): pid=25135 uid=0 auid=0 ses=9 subj=system_u:system_r:crond_t:s0-s0:c0.c1023 msg='op=PAM:setcred grantors=pam_env,pam_unix acct="root" exe="/usr/sbin/crond" hostname=? addr=? terminal=cron res=success'
+type=CRED_DISP msg=audit(1601859662.966:1626): pid=25135 uid=0 auid=0 ses=9 subj=system_u:system_r:crond_t:s0-s0:c0.c1023 msg='op=PAM:setcred grantors=pam_env,pam_unix acct="root" exe="/usr/sbin/crond" hostname=? addr=? terminal=cron res=success'
+type=USER_END msg=audit(1601859662.966:1627): pid=25135 uid=0 auid=0 ses=9 subj=system_u:system_r:crond_t:s0-s0:c0.c1023 msg='op=PAM:session_close grantors=pam_loginuid,pam_keyinit,pam_limits,pam_systemd acct="root" exe="/usr/sbin/crond" hostname=? addr=? terminal=cron res=success'
+[root@client ~]# audit2why < /var/log/audit/audit.log 
+Nothing to do
+```
+Со стороны клиента исправлять нечего...вроде..Посмотрим что на стороне сервера.
+
+```
+[root@ns01 ~]# audit2why < /var/log/audit/audit.log 
+type=AVC msg=audit(1601860832.151:2084): avc:  denied  { create } for  pid=5547 comm="isc-worker0000" name="named.ddns.lab.view1.jnl" scontext=system_u:system_r:named_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file permissive=0
+
+	Was caused by:
+		Missing type enforcement (TE) allow rule.
+
+		You can use audit2allow to generate a loadable module to allow this access.
+```
+Как показано, доступ блокирован, в соответствии с отсутствием правила Type Enforcement.Воспользуемся предложенным рецептом.
+```
+[root@ns01 ~]# audit2allow < /var/log/audit/audit.log 
+
+
+#============= named_t ==============
+
+#!!!! WARNING: 'etc_t' is a base type.
+allow named_t etc_t:file create;
+```
+Создадим правила и установим необходимый модуль
+
+```
+[root@ns01 ~]# audit2allow -a -M mynamed    
+******************** IMPORTANT ***********************
+To make this policy package active, execute:
+
+semodule -i mynamed.pp
+
+[root@ns01 ~]# semodule -i mynamed.pp
+[root@ns01 ~]# 
+```
+Проверим со стороны клиента...
+
+```
+[root@client ~]# nsupdate -k /etc/named.zonetransfer.key
+> server 192.168.50.10
+> zone ddns.lab
+> update add www.ddns.lab. 60 A 192.168.50.15
+> send
+; TSIG error with server: clocks are unsynchronized
+update failed: NOTAUTH(BADTIME)
+> quit
+```
+Ошибка с доступом изначальная ушла, правда вывалилась другого характера... но борьбу с ней в продолжу в другой раз.
