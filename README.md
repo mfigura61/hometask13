@@ -70,7 +70,7 @@ type=SYSCALL msg=audit(1601804753.720:1665): arch=c000003e syscall=49 success=no
 type=PROCTITLE msg=audit(1601804753.720:1665): proctitle=2F7573722F7362696E2F6E67696E78002D74
 type=SERVICE_START msg=audit(1601804753.834:1666): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='unit=nginx comm="systemd" exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=failed'UID="root" AUID="unset"
 ```
-Воспользуемся утилитой audit2why,скоормив ей на вход логи.
+Воспользуемся утилитой audit2why,скормив ей на вход логи.
 ```
 [root@localhost ~]# audit2why </var/log/audit/audit.log 
 type=AVC msg=audit(1601805249.872:1667): avc:  denied  { name_bind } for  pid=35451 comm="nginx" src=3400 scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:object_r:unreserved_port_t:s0 tclass=tcp_socket permissive=0
