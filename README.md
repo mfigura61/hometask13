@@ -190,38 +190,75 @@ type=AVC msg=audit(1601860832.151:2084): avc:  denied  { create } for  pid=5547 
 
 		You can use audit2allow to generate a loadable module to allow this access.
 ```
-Как показано, доступ блокирован, в соответствии с отсутствием правила Type Enforcement.Воспользуемся предложенным рецептом.
-```
-[root@ns01 ~]# audit2allow < /var/log/audit/audit.log 
-
-
-#============= named_t ==============
-
-#!!!! WARNING: 'etc_t' is a base type.
-allow named_t etc_t:file create;
-```
-Создадим правила и установим необходимый модуль
+Как показано, доступ блокирован, в соответствии с отсутствием правила Type Enforcement. 
+Также посмотрим вывод утилиты sealert:
 
 ```
-[root@ns01 ~]# audit2allow -a -M mynamed    
-******************** IMPORTANT ***********************
-To make this policy package active, execute:
+[root@ns01 ~]# sealert -a /var/log/audit/audit.log
+100% done
+found 2 alerts in /var/log/audit/audit.log
+--------------------------------------------------------------------------------
 
-semodule -i mynamed.pp
+SELinux is preventing /usr/sbin/named from search access on the directory net.
 
-[root@ns01 ~]# semodule -i mynamed.pp
-[root@ns01 ~]# 
+*****  Plugin catchall (100. confidence) suggests   **************************
+
+If you believe that named should be allowed search access on the net directory by default.
+Then you should report this as a bug.
+You can generate a local policy module to allow this access.
+Do
+allow this access for now by executing:
+ #ausearch -c 'isc-worker0000' --raw | audit2allow -M my-iscworker0000
+ #semodule -i my-iscworker0000.pp
+.....
+
+SELinux is preventing /usr/sbin/named from create access on the file named.ddns.lab.view1.jnl.
+
+*****  Plugin catchall_labels (83.8 confidence) suggests   *******************
+
+If you want to allow named to have create access on the named.ddns.lab.view1.jnl file
+Then you need to change the label on named.ddns.lab.view1.jnl
+Do
+# semanage fcontext -a -t FILE_TYPE 'named.ddns.lab.view1.jnl'
+where FILE_TYPE is one of the following: dnssec_trigger_var_run_t, ipa_var_lib_t, krb5_host_rcache_t, krb5_keytab_t, named_cache_t, named_log_t, named_tmp_t, named_var_run_t, named_zone_t.
+Then execute:
+restorecon -v 'named.ddns.lab.view1.jnl'
+*****  Plugin catchall (17.1 confidence) suggests   **************************
+
+If you believe that named should be allowed create access on the named.ddns.lab.view1.jnl file by default.
+Then you should report this as a bug.
+You can generate a local policy module to allow this access.
+Do
+allow this access for now by executing:
+# ausearch -c 'isc-worker0000' --raw | audit2allow -M my-iscworker0000
+# semodule -i my-iscworker0000.pp
+....
+
 ```
-Проверим со стороны клиента...
+Видим, что SELinux запрещает утилите /usr/sbin/named доступ к созданию файла named.ddns.lab.view1.jnl, и предлагает 2 решения: С помошью утилиты audit2allow создать разрешающий модуль; Или с помощью утилиты semanage изменить контекст для файла named.ddns.lab.view1.jnl.
 
+Создание модулей утилитой audit2allow чревато с точки зрения ИБ, поэтому воспользуемся 2м способом.
+
+Из файла /etc/named.conf получим распололжение файла зоны ddns.lab: /etc/named/dynamic/named.ddns.lab.view1. Смотрим тип файла в его контексте безопасности:
 ```
-[root@client ~]# nsupdate -k /etc/named.zonetransfer.key
+[root@ns01 ~]# ll -Z /etc/named/dynamic/named.ddns.lab.view1
+-rw-rw----. named named system_u:object_r:etc_t:s0       /etc/named/dynamic/named.ddns.lab.view1
+```
+Видно, что тип -``` etc_t ```, а из документации RedHat следует ("Use the /var/named/dynamic/ directory for zone files you want updated by dynamic DNS. .."), что по умолчанию для динамических зон используется директория /var/named/dynamic/, файлы в которой наследуют тип named_cache_t. Поэтому изменим тип в контексте для директории /etc/named/dynamic/:
+```
+[root@ns01 ~]# semanage fcontext -a -t named_cache_t '/etc/named/dynamic(/.*)?'
+[root@ns01 ~]# restorecon -R -v /etc/named/dynamic/
+restorecon reset /etc/named/dynamic context unconfined_u:object_r:etc_t:s0->unconfined_u:object_r:named_cache_t:s0
+restorecon reset /etc/named/dynamic/named.ddns.lab context system_u:object_r:etc_t:s0->system_u:object_r:named_cache_t:s0
+restorecon reset /etc/named/dynamic/named.ddns.lab.view1 context system_u:object_r:etc_t:s0->system_u:object_r:named_cache_t:s0
+```
+Теперь снова попробуем измененить зону ddns.lab: в этот раз ошибок нет.
+```
+[vagrant@client ~]$ nsupdate -k /etc/named.zonetransfer.key
 > server 192.168.50.10
 > zone ddns.lab
 > update add www.ddns.lab. 60 A 192.168.50.15
 > send
-; TSIG error with server: clocks are unsynchronized
-update failed: NOTAUTH(BADTIME)
+> 
 > quit
 ```
-Ошибка с доступом изначальная ушла, правда вывалилась другого характера... но борьбу с ней я продолжу в другой раз.
